@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package poc;
+
+message BatteryPayload {
+  string device_id = 1;
+  double voltage = 2;
+  double current = 3;
+  int64 timestamp = 4;
+}
+
+message Envelope {
+  string subject = 1;
+  bytes data = 2;
+}
