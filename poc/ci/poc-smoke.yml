@@ -1,0 +1,100 @@
+name: PoC Smoke Test
+
+on:
+  push:
+    paths:
+      - 'poc/**'
+  pull_request:
+    paths:
+      - 'poc/**'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: 7.0.x
+
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.20'
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Download nats-server
+      run: |
+        wget -qO /tmp/nats-server.tgz https://github.com/nats-io/nats-server/releases/latest/download/nats-server-linux-amd64.tar.gz
+        mkdir -p /tmp/nats
+        tar -xzf /tmp/nats-server.tgz -C /tmp/nats --strip-components=1
+        sudo mv /tmp/nats/nats-server /usr/local/bin/nats-server
+
+    - name: Download nats CLI
+      run: |
+        wget -qO /tmp/nats-cli.tgz https://github.com/nats-io/natscli/releases/latest/download/nats-0.0.0-linux-amd64.tar.gz || true
+        # fallback: install via go (if wget fails)
+        if [ ! -f /usr/local/bin/nats ]; then
+          go install github.com/nats-io/natscli/nats@latest
+          export PATH="$PATH:$(go env GOPATH)/bin"
+        fi
+
+    - name: Start nats-server
+      run: |
+        mkdir -p poc/nats/jetstream_store
+        nohup nats-server -js -c poc/nats/nats.conf > nats.log 2>&1 &
+        sleep 2
+        nats server check
+
+    - name: Create JetStream stream
+      run: |
+        # create stream BATTERY for subject battery.telemetry
+        if command -v nats >/dev/null 2>&1; then
+          nats stream add BATTERY --subjects "battery.telemetry" --storage file --retention limits || true
+        else
+          echo "nats CLI not available; continuing."
+        fi
+
+    - name: Build collector
+      working-directory: poc/collector
+      run: |
+        dotnet restore
+        dotnet build -c Debug
+
+    - name: Build publisher
+      working-directory: poc/tools/publisher
+      run: |
+        dotnet restore
+        dotnet build -c Release
+
+    - name: Run collector (background)
+      run: |
+        dotnet run --project poc/collector -- 9000 &
+        sleep 2
+
+    - name: Run publisher (send messages)
+      run: |
+        dotnet run --project poc/tools/publisher -- nats://127.0.0.1:4222 200
+
+    - name: Build and test Go source
+      working-directory: poc/sqlflow_source/impl
+      run: |
+        go test ./...
+        go build -v ./...
+
+    - name: Archive logs
+      if: always()
+      run: |
+        echo "--- nats log ---"
+        if [ -f nats.log ]; then tail -n +1 nats.log; fi
+        echo "--- collector logs (if any) ---"
+        ps aux | grep dotnet || true

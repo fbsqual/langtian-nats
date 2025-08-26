@@ -1,0 +1,25 @@
+name: Python SQLFlow NATS Source PoC
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'poc/sqlflow_source/python_impl/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      nats:
+        image: nats:2.10.4
+        ports:
+          - 4222:4222
+        options: --memory 512m
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run tests in Docker
+        run: |
+          cd poc/sqlflow_source/python_impl
+          docker build -t sqlflow-jet-poc .
+          docker run --network host --rm sqlflow-jet-poc
